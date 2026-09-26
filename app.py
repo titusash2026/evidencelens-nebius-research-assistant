@@ -5,13 +5,18 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from tavily import TavilyClient
 
+from src.planner import generate_research_plan
+from src.safety import get_research_disclaimer, validate_research_question
+
 load_dotenv()
 
 st.set_page_config(
-    page_title="Nebius Research Assistant",
+    page_title="EvidenceLens",
     page_icon="🔬",
     layout="wide",
 )
+
+MODEL_NAME = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"
 
 TRUSTED_DOMAINS = [
     "pubmed.ncbi.nlm.nih.gov",
@@ -25,9 +30,11 @@ TRUSTED_DOMAINS = [
     "radiologyinfo.org",
 ]
 
-st.title("🔬 Nebius Research Assistant")
-st.write("Search credible research sources and create a source-grounded AI summary.")
-st.caption("For research and education only — not medical diagnosis or clinical advice.")
+st.title("🔬 EvidenceLens")
+st.write(
+    "A trusted research agent for IPF, medical imaging, and medical-AI literature."
+)
+st.caption(get_research_disclaimer())
 
 nebius_key = os.getenv("NEBIUS_API_KEY")
 tavily_key = os.getenv("TAVILY_API_KEY")
@@ -44,44 +51,81 @@ nebius_client = OpenAI(
 tavily_client = TavilyClient(api_key=tavily_key)
 
 with st.sidebar:
-    st.header("Search settings")
+    st.header("Research settings")
+
     source_mode = st.radio(
         "Source policy",
         ["Trusted medical & scientific sources", "Broad web sources"],
     )
-    st.info("Trusted mode prioritises PubMed, NCBI, NIH, WHO, journals, and radiology organisations.")
+
+    st.info(
+        "Trusted mode prioritises PubMed, NCBI, NIH, WHO, journals, "
+        "and radiology organisations."
+    )
 
 question = st.text_area(
     "Enter your research question",
-    placeholder="Example: Why is patient-level splitting important in medical imaging AI?",
+    placeholder=(
+        "Example: What HRCT findings are most consistently associated "
+        "with UIP-pattern IPF?"
+    ),
     height=120,
 )
 
-if st.button("Search sources and generate answer", type="primary"):
-    if not question.strip():
-        st.warning("Please enter a question first.")
+if st.button("Run EvidenceLens research agent", type="primary"):
+    is_valid, safety_message = validate_research_question(question)
+
+    if not is_valid:
+        st.warning(safety_message)
         st.stop()
 
     try:
-        search_options = {
-            "query": question,
-            "search_depth": "advanced",
-            "max_results": 5,
-        }
+        with st.status("EvidenceLens agent is working...", expanded=True) as status:
+            st.write("1. Planning focused evidence questions with NVIDIA Nemotron...")
 
-        if source_mode == "Trusted medical & scientific sources":
-            search_options["include_domains"] = TRUSTED_DOMAINS
+            research_plan = generate_research_plan(
+                client=nebius_client,
+                model=MODEL_NAME,
+                question=question,
+            )
 
-        with st.spinner("Searching sources..."):
-            search_response = tavily_client.search(**search_options)
+            st.write("2. Retrieving trusted evidence with Tavily...")
 
-        sources = search_response.get("results", [])
+            source_map = {}
+
+            for plan_question in research_plan:
+                search_options = {
+                    "query": plan_question,
+                    "search_depth": "advanced",
+                    "max_results": 2,
+                }
+
+                if source_mode == "Trusted medical & scientific sources":
+                    search_options["include_domains"] = TRUSTED_DOMAINS
+
+                search_response = tavily_client.search(**search_options)
+
+                for source in search_response.get("results", []):
+                    url = source.get("url", "")
+
+                    if url and url not in source_map:
+                        source_map[url] = source
+
+            sources = list(source_map.values())[:6]
+
+            st.write("3. Generating a cited research synthesis with NVIDIA Nemotron...")
+            status.update(label="EvidenceLens agent completed", state="complete")
 
         if not sources:
             st.warning(
-                "No matching sources found. Try a more specific question or choose Broad web sources."
+                "No matching sources found. Try a more specific question "
+                "or choose Broad web sources."
             )
             st.stop()
+
+        st.subheader("Agent research plan")
+        for index, plan_question in enumerate(research_plan, start=1):
+            st.write(f"{index}. {plan_question}")
 
         source_context = "\n\n".join(
             [
@@ -92,24 +136,26 @@ if st.button("Search sources and generate answer", type="primary"):
             ]
         )
 
-        with st.spinner("Nebius is writing a source-grounded answer..."):
+        with st.spinner("Writing the evidence-based report..."):
             response = nebius_client.chat.completions.create(
-                model="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+                model=MODEL_NAME,
                 messages=[
                     {
                         "role": "system",
                         "content": (
-                            "You are a careful medical-AI research assistant. "
-                            "Answer only from the supplied source material. "
-                            "Cite each factual claim using [1], [2], and so on. "
-                            "If evidence is insufficient or sources conflict, state that clearly. "
-                            "Do not diagnose, treat, or give patient-specific medical advice."
+                            "You are EvidenceLens, a careful medical-AI research "
+                            "assistant. Answer only from the supplied source material. "
+                            "Cite every factual claim using [1], [2], and so on. "
+                            "If evidence is insufficient, state that clearly. "
+                            "If sources conflict, state the conflict clearly. "
+                            "Do not diagnose, treat, prescribe, or provide "
+                            "patient-specific medical advice."
                         ),
                     },
                     {
                         "role": "user",
                         "content": (
-                            f"Question:\n{question}\n\n"
+                            f"Research question:\n{question}\n\n"
                             f"Source material:\n{source_context}"
                         ),
                     },
@@ -118,7 +164,7 @@ if st.button("Search sources and generate answer", type="primary"):
                 max_tokens=2000,
             )
 
-        st.subheader("Research summary")
+        st.subheader("Evidence-based research summary")
         st.write(response.choices[0].message.content)
 
         st.subheader("Sources used")
