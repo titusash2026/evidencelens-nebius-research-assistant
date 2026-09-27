@@ -4,9 +4,11 @@ import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
 from tavily import TavilyClient
+from src.report import build_markdown_report
 
 from src.planner import generate_research_plan
 from src.safety import get_research_disclaimer, validate_research_question
+from src.verifier import verify_claims
 
 load_dotenv()
 
@@ -89,7 +91,7 @@ if st.button("Run EvidenceLens research agent", type="primary"):
                 question=question,
             )
 
-            st.write("2. Retrieving trusted evidence with Tavily...")
+            st.write("2. Retrieving evidence with Tavily...")
 
             source_map = {}
 
@@ -113,8 +115,69 @@ if st.button("Run EvidenceLens research agent", type="primary"):
 
             sources = list(source_map.values())[:6]
 
-            st.write("3. Generating a cited research synthesis with NVIDIA Nemotron...")
-            status.update(label="EvidenceLens agent completed", state="complete")
+            if not sources:
+                status.update(
+                    label="No matching evidence sources found",
+                    state="error",
+                )
+            else:
+                source_context = "\n\n".join(
+                    [
+                        f"[{index}] Title: {source.get('title', 'Untitled')}\n"
+                        f"URL: {source.get('url', '')}\n"
+                        f"Content: {source.get('content', '')}"
+                        for index, source in enumerate(sources, start=1)
+                    ]
+                )
+
+                st.write(
+                    "3. Generating a cited research synthesis with NVIDIA Nemotron..."
+                )
+
+                response = nebius_client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are EvidenceLens, a careful medical-AI research "
+                                "assistant. Answer only from the supplied source material. "
+                                "Cite every factual claim using [1], [2], and so on. "
+                                "If evidence is insufficient, state that clearly. "
+                                "If sources conflict, state the conflict clearly. "
+                                "Do not diagnose, treat, prescribe, or provide "
+                                "patient-specific medical advice."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Research question:\n{question}\n\n"
+                                f"Source material:\n{source_context}"
+                            ),
+                        },
+                    ],
+                    temperature=0.2,
+                    max_tokens=2000,
+                )
+
+                summary = response.choices[0].message.content or (
+                    "No research summary was generated."
+                )
+
+                st.write("4. Verifying summary claims against the evidence...")
+
+                verification_items = verify_claims(
+                    client=nebius_client,
+                    model=MODEL_NAME,
+                    answer=summary,
+                    sources=sources,
+                )
+
+                status.update(
+                    label="EvidenceLens agent completed",
+                    state="complete",
+                )
 
         if not sources:
             st.warning(
@@ -127,45 +190,36 @@ if st.button("Run EvidenceLens research agent", type="primary"):
         for index, plan_question in enumerate(research_plan, start=1):
             st.write(f"{index}. {plan_question}")
 
-        source_context = "\n\n".join(
-            [
-                f"[{index}] Title: {source.get('title', 'Untitled')}\n"
-                f"URL: {source.get('url', '')}\n"
-                f"Content: {source.get('content', '')}"
-                for index, source in enumerate(sources, start=1)
-            ]
+        st.subheader("Evidence-based research summary")
+        st.write(summary)
+
+        st.subheader("Claim verification")
+
+        if verification_items:
+            st.dataframe(
+                verification_items,
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info(
+                "The verifier could not produce structured results for this run. "
+                "Please review the cited sources directly."
+            )
+            report_content = build_markdown_report(
+            question=question,
+            research_plan=research_plan,
+            summary=summary,
+            verification_items=verification_items,
+            sources=sources,
         )
 
-        with st.spinner("Writing the evidence-based report..."):
-            response = nebius_client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are EvidenceLens, a careful medical-AI research "
-                            "assistant. Answer only from the supplied source material. "
-                            "Cite every factual claim using [1], [2], and so on. "
-                            "If evidence is insufficient, state that clearly. "
-                            "If sources conflict, state the conflict clearly. "
-                            "Do not diagnose, treat, prescribe, or provide "
-                            "patient-specific medical advice."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Research question:\n{question}\n\n"
-                            f"Source material:\n{source_context}"
-                        ),
-                    },
-                ],
-                temperature=0.2,
-                max_tokens=2000,
-            )
-
-        st.subheader("Evidence-based research summary")
-        st.write(response.choices[0].message.content)
+        st.download_button(
+            label="Download evidence report",
+            data=report_content,
+            file_name="evidencelens-evidence-report.md",
+            mime="text/markdown",
+        )
 
         st.subheader("Sources used")
         for index, source in enumerate(sources, start=1):
