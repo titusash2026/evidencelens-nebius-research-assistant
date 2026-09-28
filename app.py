@@ -1,17 +1,18 @@
 import os
 import time
 
-
 import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
 from tavily import TavilyClient
-from src.report import build_markdown_report
-from src.metrics import calculate_run_metrics
 
+from src.evaluation_cases import EVALUATION_CASES
+from src.metrics import calculate_run_metrics
 from src.planner import generate_research_plan
+from src.report import build_markdown_report
 from src.safety import get_research_disclaimer, validate_research_question
 from src.verifier import verify_claims
+
 
 load_dotenv()
 
@@ -35,6 +36,13 @@ TRUSTED_DOMAINS = [
     "rsna.org",
     "radiologyinfo.org",
 ]
+
+
+def evaluation_label(case: dict) -> str:
+    """Create one readable label for each evaluation test case."""
+    case_name = case["id"].replace("_", " ").title()
+    return f"{case['category']}: {case_name}"
+
 
 st.title("🔬 EvidenceLens")
 st.write(
@@ -62,6 +70,7 @@ with st.sidebar:
     source_mode = st.radio(
         "Source policy",
         ["Trusted medical & scientific sources", "Broad web sources"],
+        key="source_policy",
     )
 
     st.info(
@@ -69,22 +78,63 @@ with st.sidebar:
         "and radiology organisations."
     )
 
+    st.divider()
+    st.subheader("Evaluation mode")
+
+    evaluation_options = ["Custom research question"] + [
+        evaluation_label(case) for case in EVALUATION_CASES
+    ]
+
+    selected_evaluation = st.selectbox(
+        "Choose a demo test case",
+        evaluation_options,
+        key="evaluation_case",
+    )
+
+    selected_case = None
+
+    if selected_evaluation != "Custom research question":
+        selected_case = next(
+            case
+            for case in EVALUATION_CASES
+            if evaluation_label(case) == selected_evaluation
+        )
+
+        st.caption("Expected safe behavior")
+        st.info(selected_case["expected_behavior"])
+
+default_question = selected_case["question"] if selected_case else ""
+
 question = st.text_area(
     "Enter your research question",
+    value=default_question,
     placeholder=(
         "Example: What HRCT findings are most consistently associated "
         "with UIP-pattern IPF?"
     ),
     height=120,
+    key=(
+        f"research_question_"
+        f"{selected_case['id'] if selected_case else 'custom'}"
+    ),
 )
 
 if st.button("Run EvidenceLens research agent", type="primary"):
+    if not question.strip():
+        st.warning("Please enter a research question.")
+        st.stop()
+
     is_valid, safety_message = validate_research_question(question)
 
     if not is_valid:
         st.warning(safety_message)
         st.stop()
+
     started_at = time.perf_counter()
+    sources = []
+    research_plan = []
+    verification_items = []
+    summary = ""
 
     try:
         with st.status("EvidenceLens agent is working...", expanded=True) as status:
@@ -178,13 +228,6 @@ if st.button("Run EvidenceLens research agent", type="primary"):
                     answer=summary,
                     sources=sources,
                 )
-                elapsed_seconds = time.perf_counter() - started_at
-
-                run_metrics = calculate_run_metrics(
-                    sources=sources,
-                    verification_items=verification_items,
-                    elapsed_seconds=elapsed_seconds,
-                )
 
                 status.update(
                     label="EvidenceLens agent completed",
@@ -197,6 +240,14 @@ if st.button("Run EvidenceLens research agent", type="primary"):
                 "or choose Broad web sources."
             )
             st.stop()
+
+        elapsed_seconds = time.perf_counter() - started_at
+
+        run_metrics = calculate_run_metrics(
+            sources=sources,
+            verification_items=verification_items,
+            elapsed_seconds=elapsed_seconds,
+        )
 
         st.subheader("Agent research plan")
         for index, plan_question in enumerate(research_plan, start=1):
@@ -240,7 +291,7 @@ if st.button("Run EvidenceLens research agent", type="primary"):
         if verification_items:
             st.dataframe(
                 verification_items,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
         else:
@@ -248,13 +299,6 @@ if st.button("Run EvidenceLens research agent", type="primary"):
                 "The verifier could not produce structured results for this run. "
                 "Please review the cited sources directly."
             )
-            report_content = build_markdown_report(
-            question=question,
-            research_plan=research_plan,
-            summary=summary,
-            verification_items=verification_items,
-            sources=sources,
-        )
 
         report_content = build_markdown_report(
             question=question,
@@ -262,9 +306,8 @@ if st.button("Run EvidenceLens research agent", type="primary"):
             summary=summary,
             sources=sources,
             verification_items=verification_items,
-            
         )
-        
+
         st.download_button(
             label="Download evidence report",
             data=report_content,
