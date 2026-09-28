@@ -1,10 +1,13 @@
 import os
+import time
+
 
 import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
 from tavily import TavilyClient
 from src.report import build_markdown_report
+from src.metrics import calculate_run_metrics
 
 from src.planner import generate_research_plan
 from src.safety import get_research_disclaimer, validate_research_question
@@ -19,6 +22,7 @@ st.set_page_config(
 )
 
 MODEL_NAME = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"
+VERIFIER_MODEL = "openai/gpt-oss-120b"
 
 TRUSTED_DOMAINS = [
     "pubmed.ncbi.nlm.nih.gov",
@@ -80,6 +84,7 @@ if st.button("Run EvidenceLens research agent", type="primary"):
     if not is_valid:
         st.warning(safety_message)
         st.stop()
+    started_at = time.perf_counter()
 
     try:
         with st.status("EvidenceLens agent is working...", expanded=True) as status:
@@ -169,9 +174,16 @@ if st.button("Run EvidenceLens research agent", type="primary"):
 
                 verification_items = verify_claims(
                     client=nebius_client,
-                    model=MODEL_NAME,
+                    model=VERIFIER_MODEL,
                     answer=summary,
                     sources=sources,
+                )
+                elapsed_seconds = time.perf_counter() - started_at
+
+                run_metrics = calculate_run_metrics(
+                    sources=sources,
+                    verification_items=verification_items,
+                    elapsed_seconds=elapsed_seconds,
                 )
 
                 status.update(
@@ -189,6 +201,36 @@ if st.button("Run EvidenceLens research agent", type="primary"):
         st.subheader("Agent research plan")
         for index, plan_question in enumerate(research_plan, start=1):
             st.write(f"{index}. {plan_question}")
+
+        st.subheader("Run trace")
+
+        metric_row_one = st.columns(3)
+        metric_row_one[0].metric(
+            "Sources retrieved",
+            run_metrics["Sources retrieved"],
+        )
+        metric_row_one[1].metric(
+            "Claims checked",
+            run_metrics["Claims checked"],
+        )
+        metric_row_one[2].metric(
+            "Supported claims",
+            run_metrics["Supported claims"],
+        )
+
+        metric_row_two = st.columns(3)
+        metric_row_two[0].metric(
+            "Conflicting claims",
+            run_metrics["Conflicting claims"],
+        )
+        metric_row_two[1].metric(
+            "Insufficient evidence",
+            run_metrics["Insufficient evidence"],
+        )
+        metric_row_two[2].metric(
+            "Runtime",
+            f"{run_metrics['Runtime seconds']} s",
+        )
 
         st.subheader("Evidence-based research summary")
         st.write(summary)
@@ -214,6 +256,15 @@ if st.button("Run EvidenceLens research agent", type="primary"):
             sources=sources,
         )
 
+        report_content = build_markdown_report(
+            question=question,
+            research_plan=research_plan,
+            summary=summary,
+            sources=sources,
+            verification_items=verification_items,
+            
+        )
+        
         st.download_button(
             label="Download evidence report",
             data=report_content,

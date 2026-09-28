@@ -8,9 +8,55 @@ ALLOWED_STATUSES = {
 }
 
 
+VERIFICATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verification_items": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "Supported",
+                            "Conflicting",
+                            "Insufficient evidence",
+                        ],
+                    },
+                    "evidence": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": [
+                    "claim",
+                    "status",
+                    "evidence",
+                    "reason",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["verification_items"],
+    "additionalProperties": False,
+}
+
+
+def normalise_status(status: str) -> str:
+    """Return one safe evidence-status label."""
+
+    if status in ALLOWED_STATUSES:
+        return status
+
+    return "Insufficient evidence"
+
+
 def verify_claims(client, model: str, answer: str, sources: list[dict]) -> list[dict]:
     """
-    Check factual claims in the generated summary against the retrieved sources.
+    Verify up to five claims using Nebius strict JSON-schema output.
     """
 
     source_context = "\n\n".join(
@@ -29,12 +75,10 @@ def verify_claims(client, model: str, answer: str, sources: list[dict]) -> list[
                 "role": "system",
                 "content": (
                     "You are a strict evidence-verification agent. "
-                    "Evaluate up to five factual claims from the research summary "
+                    "Evaluate exactly three factual claims from the research summary "
+                    "Keep each claim, evidence, and reason concise—one sentence each."
                     "using only the supplied source material. "
-                    "Return valid JSON only: a list of objects with exactly these "
-                    "keys: claim, status, evidence, reason. "
-                    "Status must be exactly one of: Supported, Conflicting, "
-                    "Insufficient evidence. "
+                    "Return the required JSON schema. "
                     "Do not give medical advice."
                 ),
             },
@@ -46,30 +90,37 @@ def verify_claims(client, model: str, answer: str, sources: list[dict]) -> list[
                 ),
             },
         ],
+        # response_format={
+        #     "type": "json_schema",
+        #     "json_schema": VERIFICATION_SCHEMA,
+        # },
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "claim_verification",
+                "schema": VERIFICATION_SCHEMA,
+                "strict": True,
+            },
+        },
         temperature=0.0,
-        max_tokens=900,
+        max_tokens=1400,
     )
 
-    raw_result = response.choices[0].message.content or "[]"
-    raw_result = raw_result.strip().removeprefix("```json").removesuffix("```").strip()
+    raw_result = response.choices[0].message.content or "{}"
+    print("\n--- VERIFIER STRUCTURED RESPONSE ---")
+    print(raw_result)
+    print("--- END VERIFIER STRUCTURED RESPONSE ---\n")
 
-    try:
-        verification_items = json.loads(raw_result)
-    except json.JSONDecodeError:
-        return []
+    result_data = json.loads(raw_result)
 
+    verification_items = result_data.get("verification_items", [])
     clean_items = []
 
     for item in verification_items:
-        status = item.get("status", "Insufficient evidence")
-
-        if status not in ALLOWED_STATUSES:
-            status = "Insufficient evidence"
-
         clean_items.append(
             {
                 "claim": item.get("claim", "Claim not available"),
-                "status": status,
+                "status": normalise_status(item.get("status", "")),
                 "evidence": item.get("evidence", "No source reference"),
                 "reason": item.get("reason", "No explanation available"),
             }

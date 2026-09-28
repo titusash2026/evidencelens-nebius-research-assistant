@@ -78,7 +78,8 @@ def build_markdown_report(
             "",
             "## System transparency",
             "",
-            "- Planning, synthesis, and verification: NVIDIA Nemotron via Nebius Token Factory",
+            "- - Planning and synthesis: NVIDIA Nemotron via Nebius Token Factory"
+            "- Claim verification: OpenAI gpt-oss-120b via Nebius Token Factory",
             "- Evidence retrieval: Tavily",
             "- Source policy: trusted scientific and medical sources when selected",
         ]
