@@ -2,3 +2,8 @@ streamlit
 openai
 python-dotenv
 tavily-python
+httpx[socks]==0.28.1
+truststore
+
+
+

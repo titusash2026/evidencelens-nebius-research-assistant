@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 
@@ -12,6 +13,7 @@ def build_markdown_report(
     summary: str,
     verification_items: list[dict],
     sources: list[dict],
+    research_task: dict | None = None,
 ) -> str:
     """Create an auditable EvidenceLens research report."""
 
@@ -34,6 +36,18 @@ def build_markdown_report(
 
     for index, plan_question in enumerate(research_plan, start=1):
         report.append(f"{index}. {plan_question}")
+
+        if research_task:
+            report.extend(
+            [
+                "",
+                "## Stage 1 structured research task",
+                "",
+                "```json",
+                json.dumps(research_task, indent=2),
+                "```",
+            ]
+        )
 
     report.extend(
         [

@@ -65,3 +65,27 @@ streamlit run app.py
 ## License
 
 MIT License
+
+
+
+
+EvidenceLens retrieval upgrade
+
+Files in this package:
+- app.py
+- free_biomedical_retrieval.py
+- src/intervention_gate.py
+- src/coverage_controller.py
+
+Before copying, make backups in the EvidenceLens project folder:
+
+cp app.py app.before_retrieval_upgrade.py
+cp free_biomedical_retrieval.py free_biomedical_retrieval.before_upgrade.py
+cp src/coverage_controller.py src/coverage_controller.before_upgrade.py
+
+Copy the package files into the matching paths in the project, then run:
+
+./.venv/bin/python -m py_compile app.py free_biomedical_retrieval.py src/intervention_gate.py src/coverage_controller.py
+./.venv/bin/python -m streamlit run app.py
+
+This upgrade is based on the app.py supplied for this EvidenceLens session.
